@@ -1,0 +1,18 @@
+name: Panel Recover
+version: "1.0.0"
+slug: panel_recover
+description: Brings the Shelly Wall Display's built-in Home Assistant page back when it is black after the Shelly app restarted.
+url: https://github.com/rmobost-dev/ha-panel-recover
+arch:
+  - aarch64
+init: false
+startup: application
+boot: auto
+stdin: true
+options:
+  poll_seconds: 30
+  settle_seconds: 60
+schema:
+  host: str
+  poll_seconds: int(10,600)
+  settle_seconds: int(10,600)
