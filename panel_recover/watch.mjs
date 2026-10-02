@@ -7,9 +7,9 @@ import { createInterface } from 'node:readline';
 import { recoverPanel, get } from './lib/panel-recover.mjs';
 import { createWatcher } from './watch-lib.mjs';
 
-const pad = (n) => String(n).padStart(2, '0');
-// local time (the Supervisor passes the host's TZ; the base image has tzdata), as the rest of Home Assistant shows it
-const stamp = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+// UTC, and said so: the Supervisor passes the host's TZ, but Alpine's Node has no ICU data for it (only the small
+// English set) and would show UTC as if it were local time
+const stamp = (d = new Date()) => `${d.toISOString().slice(0, 19).replace('T', ' ')} UTC`;
 const log = (msg) => console.log(`${stamp()} ${msg}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fail = (msg) => { console.error(`panel_recover: ${msg}`); process.exit(1); };
