@@ -5,5 +5,5 @@ FROM ghcr.io/home-assistant/base:3.23
 RUN apk add --no-cache nodejs
 WORKDIR /app
 COPY lib/ ./lib/
-COPY watch.mjs watch-lib.mjs ./
+COPY watch.mjs watch-lib.mjs debug-log.mjs ./
 CMD ["node", "/app/watch.mjs"]

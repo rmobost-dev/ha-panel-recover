@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { recoverPanel, get } from './lib/panel-recover.mjs';
 import { createWatcher } from './watch-lib.mjs';
+import { createDebugLog } from './debug-log.mjs';
 
 // UTC, and said so: the Supervisor passes the host's TZ, but Alpine's Node has no ICU data for it (only the small
 // English set) and would show UTC as if it were local time
@@ -31,6 +32,8 @@ const seconds = (name, fallback) => {
 };
 const pollMs = seconds('poll_seconds', 30);
 const settleMs = seconds('settle_seconds', 60);
+const debugOn = options.debug_log ?? false;
+if (typeof debugOn !== 'boolean') fail('debug_log: true or false');
 
 // what the panel sends reaches the log only as these words: a parse error would quote its body
 const readStatus = async () => {
@@ -52,6 +55,9 @@ const recover = () => {
   return running.finally(() => { running = null; });
 };
 const watcher = createWatcher({ readStatus, recover, sleep, log, settleMs });
+// the panel's own debug log, when asked for (DOCS.md): its last lines are shown when its stream ends, which a
+// Shelly app restart does
+const debugLog = debugOn && typeof WebSocket === 'function' ? createDebugLog({ url: `ws://${host}/debug/log`, log }) : null;
 
 // one thing at a time: a check, or a run asked for on stdin
 let queue = Promise.resolve();
@@ -75,6 +81,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 // s6 gives the process 3 s after SIGTERM: the run under way gets 2.5 s of it to release the panel lock
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {
+    debugLog?.stop();
     interrupt.abort();
     await Promise.race([running, sleep(2500)]);
     process.exit(0);
@@ -82,6 +89,8 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 }
 
 log(`watching ${host} every ${pollMs / 1000} s`);
+if (debugOn && !debugLog) log('debug log: this Node has no WebSocket, so the panel\'s debug log is not kept');
+debugLog?.start();
 for (;;) {
   await serial(() => watcher.check());
   await sleep(pollMs);

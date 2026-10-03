@@ -39,6 +39,33 @@ and says so in the log.
   not start until it is set.
 - `poll_seconds` (10–600): how often the uptimes are read.
 - `settle_seconds` (10–600): how long the restarted Shelly app runs before the recovery starts.
+- `debug_log` (off by default): keep the panel's own debug log and show its last lines when it ends (below). It
+  needs the panel's debug websocket on: the `Sys.SetConfig` RPC with
+  `{"config": {"debug": {"websocket": {"enable": true}}}}`. Shelly advises against leaving debug on for long.
+
+## The panel's debug log
+
+With `debug_log` on, the add-on also reads `ws://<host>/debug/log`, the stream the panel's own web interface
+shows, and keeps the last 5 minutes of it (at most 1000 lines, counted back from the stream's last message). The
+Shelly app serves that stream, so it ends when the app goes away: the add-on then prints its last 60 lines, with
+the panel's own times in UTC, under `debug log: the panel's stream ended`. A network drop ends it too.
+
+It opens the stream again 10 s after it ended, then less and less often (up to every 5 minutes) while that fails.
+It says so once when the stream cannot be opened at the start, and once when a stream that worked has stayed
+away for more than 3 minutes (that line says how long); `debug log: connected` means a stream works again.
+
+The routine lines of `Sys.GetStatus` polling (the add-on's own, and any other client's: the request, the
+empty-body line any request without parameters leaves, the call and the answer) are not shown: the first line says
+how many were left out and when the last came. A line about `Sys.GetStatus` that is not routine, such as an error,
+is shown.
+
+Masking is best effort: values under names such as token, pass, password, pin, psk, secret, ha1, api_key, cookie
+or authorization, credentials in URLs and in authorization headers, and JWTs are hidden, also URL-encoded or inside
+escaped JSON; a secret in another form may still show. Control characters are replaced and long lines cut at 300
+characters. The rest can name devices, addresses and settings of your home, and stays in this add-on's log.
+
+While the panel's debug websocket is on, the panel serves this log to anyone on your network, without a password
+(the add-on works only with panels that have none, see above). Turn it off again when you no longer need it.
 
 ## A run by hand
 
@@ -58,5 +85,5 @@ it is closed on the panel (the log says so).
 
 ## Access
 
-It talks to the panel's local RPC over HTTP and to nothing else: no Home Assistant API, no host network, no
-open ports.
+It talks to the panel's local RPC over HTTP (with `debug_log` on, also to its debug log websocket) and to nothing
+else: no Home Assistant API, no host network, no open ports.
