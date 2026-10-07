@@ -31,8 +31,9 @@ most of the screen). With another dashboard the run cannot tell that the page is
 its cache cleared, and then the run stops on a screen it does not know.
 
 The taps were measured on a Shelly Wall Display XL (SAWD-3A1XE10EU2), firmware
-`20260925-164731/2.8.0-324d2c10c-beta2`, Russian UI. On any other model or build it stops before the first tap
-and says so in the log.
+`20261006-151932/2.8.1-ff4b93321`, Russian UI. On any other model or build it stops before the first tap
+and says so in the log. The Shelly bar's buttons move with the status icons on its right (the clock, the Matter
+icon), so the gear and the Home Assistant button are found on each screenshot and tapped where they are.
 
 ## Options
 

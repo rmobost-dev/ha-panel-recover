@@ -14,7 +14,7 @@ import { request } from 'node:http';
 import { hostname } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { decodePng } from './png.mjs';
-import { classifyScreen, TAPS, CALIBRATION } from './panel-screens.mjs';
+import { readScreen, tapPoint, CALIBRATION } from './panel-screens.mjs';
 
 // every wait and window is measured on a monotonic clock: a step of the wall clock (NTP after a power cut) must
 // neither stretch nor cut one short, nor make a late lock write look in time
@@ -107,16 +107,18 @@ export async function recoverPanel({
   // once `signal` is aborted every wait ends at once with an AbortError, so does every request (whatever catches the
   // request's error meets it at the next sleep)
   const sleep = (ms) => delay(ms, undefined, { signal });
-  const shot = async (timeoutMs) => classifyScreen(decodePng(await get(host, '/screenshot', { timeoutMs, maxBytes: SCREENSHOT_MAX_BYTES, signal }), { width: 1280, height: 800 }));
+  // -> { screen, bar }: the screen's name, and where the bar's buttons are on it (when it shows the bar)
+  const shot = async (timeoutMs) => readScreen(decodePng(await get(host, '/screenshot', { timeoutMs, maxBytes: SCREENSHOT_MAX_BYTES, signal }), { width: 1280, height: 800 }));
   // Looks until the screen is `wanted` (a list, or a test on the screen name) or the time is up; with `stable`,
-  // the same screen must be seen twice in a row. An answer that asks for a password is final.
+  // the same screen, with the bar's buttons in the same place, must be seen twice in a row. An answer that asks for a
+  // password is final. -> { screen, bar, ok } (and the error, when reading failed)
   const minAttemptMs = Math.min(250, screenshotTimeoutMs); // less than this left: a request could not finish
   const look = async (timeoutMs, wanted, { stable = false, seed = null } = {}) => {
     const deadline = clock() + timeoutMs;
     const fits = typeof wanted === 'function' ? wanted : (x) => wanted.includes(x);
-    let lastSeen = null; // the last screen actually read: what a stop reason reports (else the caller's `seed`)
+    let lastSeen = null; // the last reading: what a stop reason reports (else the caller's `seed`)
     let error = null; // why reading failed, when nothing better is known
-    let previous = null;
+    let previous = null; // the reading before, as sameReading() compares it
     for (let attempts = 0; ; attempts++) {
       const left = deadline - clock();
       if (left <= 0 || (attempts > 0 && left < minAttemptMs)) break;
@@ -124,15 +126,17 @@ export async function recoverPanel({
       if (attempts > 0 && deadline - clock() < minAttemptMs) break; // the renewal took the time left
       const budget = Math.min(screenshotTimeoutMs, Math.max(1, deadline - clock()));
       try {
-        const screen = await shot(budget);
-        lastSeen = screen;
+        const reading = await shot(budget);
+        const { screen } = reading;
+        lastSeen = reading;
         error = null;
+        const again = sameReading(reading, previous);
         // two equal readings of a screen that is not the dialog: a «Очистить кэш…» dialog this run opened is gone; the
         // dialog seen before «Да» (it may come late) is this run's again
-        if (screen === previous && [...SETTINGS, 'black', 'bar', 'live'].includes(screen)) dialogOpened = false;
+        if (again && [...SETTINGS, 'black', 'bar', 'live'].includes(screen)) dialogOpened = false;
         if (screen === 'clear-dialog' && clearPending) dialogOpened = true;
-        if (fits(screen) && (!stable || screen === previous)) return { screen, ok: true };
-        previous = screen;
+        if (fits(screen) && (!stable || again)) return { ...reading, ok: true };
+        previous = reading;
       } catch (e) {
         // an attempt cut short by the step's own deadline says less than what was seen or failed before it
         if (!(budget < screenshotTimeoutMs && (lastSeen !== null || error))) error = e;
@@ -141,9 +145,11 @@ export async function recoverPanel({
       }
       await sleep(pollMs);
     }
-    return { screen: lastSeen ?? seed, error, ok: false };
+    return { screen: lastSeen?.screen ?? seed, bar: lastSeen?.bar ?? null, error, ok: false };
   };
   const anyScreen = () => true;
+  // the same screen, with the bar's buttons (if it shows them) in the same place
+  const sameReading = (a, b) => !!a && !!b && a.screen === b.screen && (a.bar?.x ?? []).join() === (b.bar?.x ?? []).join() && a.bar?.active === b.bar?.active;
   // `sig` null: a request that must go out even after an abort (the lock's release)
   const call = (method, timeoutMs = tapTimeoutMs, sig = signal) => get(host, `/rpc/${method}`, { timeoutMs, maxBytes: RPC_MAX_BYTES, signal: sig ?? undefined });
   const rpcJson = async (method, timeoutMs = 10000, sig = signal) => {
@@ -292,15 +298,16 @@ export async function recoverPanel({
   let cleared = false;
   let clearPending = false; // «Очистить кэш…» was tapped and «Да» not yet
   let dialogOpened = false; // and the dialog may be on the panel: a stop now may leave it open
-  // `onScreen`: the screen the tap was decided on. After a slow lock check it is read again; a screen that changed
-  // meanwhile is not tapped, the run decides again on what it shows now (a `rescreen`)
-  const tap = async (name, onScreen) => {
-    const [x, y] = TAPS[name];
+  // `on`: the reading the tap was decided on (its screen, and where the bar's buttons are: a tap on the bar goes where
+  // they were on it). After a slow lock check the screen is read again; a screen that changed meanwhile (the bar's
+  // buttons included) is not tapped, the run decides again on what it shows now (a `rescreen`)
+  const tap = async (name, on) => {
+    const [x, y] = tapPoint(name, on.bar);
     for (let round = 1; await holdLock(); round++) {
       if (round >= 3) throw new Error('the panel answered the lock check too slowly three times: stopped before the tap');
       const again = await look(stepTimeoutMs, anyScreen, { stable: true });
       if (!again.ok) throw new Error(`cannot read the panel's screen again before the tap: ${seen(again)}`);
-      if (again.screen !== onScreen) throw Object.assign(new Error(`the screen changed before the tap: ${again.screen}`), { rescreen: again });
+      if (!sameReading(again, on)) throw Object.assign(new Error(`the screen changed before the tap: ${again.screen}`), { rescreen: again });
     }
     log(`tap ${name} (${x},${y})`);
     tapped = true;
@@ -361,7 +368,7 @@ export async function recoverPanel({
         // settings in front before the page has been seen may hide a live page: bring the page to the front and
         // look at it before clearing anything; the settings still in front afterwards stop the run
         if (!pageSeen && SETTINGS.includes(s.screen)) {
-          await tap('haTab', s.screen);
+          await tap('haTab', s);
           s = await look(stepTimeoutMs, ['black', 'live', 'off'], { stable: true });
           if (!s.ok) return stopped(`expected the Home Assistant page after the HA tab, the panel shows ${seen(s)}`);
           continue;
@@ -397,24 +404,24 @@ export async function recoverPanel({
               else if (SETTINGS.includes(s.screen)) { pageSeen = false; graceUntil = null; }
               continue;
             }
-            if (s.screen === 'black') { await tap('strip', s.screen); wanted = ['bar']; } else { await tap('gear', s.screen); wanted = SETTINGS; }
+            if (s.screen === 'black') { await tap('strip', s); wanted = ['bar']; } else { await tap('gear', s); wanted = SETTINGS; }
             break;
           case 'settings':
-            await tap('network', s.screen); wanted = ['network'];
+            await tap('network', s); wanted = ['network'];
             break;
           case 'settings-update':
-            await tap('networkBelowUpdate', s.screen); wanted = ['network'];
+            await tap('networkBelowUpdate', s); wanted = ['network'];
             break;
           case 'network':
-            await tap('homeAssistant', s.screen); wanted = ['ha-settings'];
+            await tap('homeAssistant', s); wanted = ['ha-settings'];
             break;
           case 'clear-dialog':
             if (!dialogIsOurs) return stopped('a confirmation dialog this run did not open is on the screen: close it on the panel and run again');
-            await tap('yes', s.screen); dialogIsOurs = false; cleared = true; wanted = ['ha-settings'];
+            await tap('yes', s); dialogIsOurs = false; cleared = true; wanted = ['ha-settings'];
             break;
           case 'ha-settings':
-            if (!cleared) { await tap('clearCache', s.screen); dialogIsOurs = true; wanted = ['clear-dialog']; break; }
-            return await saveAndOpen();
+            if (!cleared) { await tap('clearCache', s); dialogIsOurs = true; wanted = ['clear-dialog']; break; }
+            return await saveAndOpen(s);
           default:
             return stopped('unknown screen: nothing is tapped on a screen this tool does not recognise');
         }
@@ -430,11 +437,11 @@ export async function recoverPanel({
     return stopped('too many steps');
   }
 
-  async function saveAndOpen() {
-    await tap('save', 'ha-settings');
+  async function saveAndOpen(onSettings) {
+    await tap('save', onSettings);
     const until = clock() + selfOpenWindowMs;
     while (clock() < until) {
-      try { if ((await shot(Math.max(1, Math.min(screenshotTimeoutMs, until - clock())))) === 'live') return done(); } catch { /* busy: keep watching */ }
+      try { if ((await shot(Math.max(1, Math.min(screenshotTimeoutMs, until - clock())))).screen === 'live') return done(); } catch { /* busy: keep watching */ }
       await sleep(pollMs);
     }
     // the HA tab only on a fresh, stable reading of a settings screen (the spot is its HA button), right before the
@@ -447,7 +454,7 @@ export async function recoverPanel({
       if (s.screen === 'live') return done();
       if (!SETTINGS.includes(s.screen) || round > 3) break;
       try {
-        await tap('haTab', s.screen);
+        await tap('haTab', s);
         break;
       } catch (e) {
         if (!e.rescreen) throw e;

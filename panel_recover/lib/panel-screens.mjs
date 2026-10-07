@@ -1,30 +1,49 @@
 // What the Shelly Wall Display XL shows, told from a 1280x800 screenshot. Calibrated on real screenshots of one
 // firmware build with the Russian UI (2026-10-01, the settings under the update notice 2026-10-07;
 // tests/fixtures/make-panel-screens.mjs of the tooling repository):
-// - colours at fixed points give the layout (which bar button is active, rows and the gaps between them);
+// - colours at fixed points give the layout (rows and the gaps between them), and the bar's buttons are found on one
+//   row of pixels (barButtons below: which of them is lit, and where they are);
 // - the settings pages and the dialog must also show the exact pixels of their titles and of the label under the tap
 //   (FINGERPRINTS: SHA-256 of those rectangles), so a moved row, another sub-page or another language reads as
 //   "unknown". The one shift known is the settings list under the «Доступно обновление» notice: one row lower, with
 //   the label under the tap checked there (the notice itself is not fingerprinted: its version number changes).
 //   The black page and the bar (its buttons animate) are recognised by colour only.
+// - the Shelly bar's five buttons move: they are centred in the space the status icons on its right leave (a few px
+//   with the clock's digits, 32 px with the Matter icon: there on 2.8.0-beta2, not on 2.8.1). So they are found on
+//   the screenshot (barButtons), and the gear and the HA tab are tapped where they are (BAR_TAPS).
 // The tool also refuses any other device or firmware build (CALIBRATION).
 import { createHash } from 'node:crypto';
 
 // The device and firmware build the taps were measured on (Shelly.GetDeviceInfo model and fw_id).
-export const CALIBRATION = { model: 'SAWD-3A1XE10EU2', fwId: '20260925-164731/2.8.0-324d2c10c-beta2' };
+// Re-calibrated on 2.8.1 on 2026-10-07: every title and label is the same pixels as on 2.8.0-beta2, only the bar moved.
+export const CALIBRATION = { model: 'SAWD-3A1XE10EU2', fwId: '20261006-151932/2.8.1-ff4b93321' };
 
 // Where each step taps (the same coordinates as in the README of the tooling repository, "Wall panel").
 export const TAPS = {
   strip: [640, 797], // the thin strip left by the hidden bar: a tap brings the bar back (a swipe does not)
-  gear: [666, 770], // bar: settings
   network: [960, 353], // Настройки: «Сеть»
   networkBelowUpdate: [960, 419], // Настройки under the «Доступно обновление» notice row: «Сеть», one row lower
   homeAssistant: [960, 623], // Сеть: «Home Assistant»
   clearCache: [960, 327], // Home Assistant: «Очистить кэш…»
   yes: [813, 458], // the confirmation dialog: «Да»
   save: [1030, 708], // Home Assistant: «Сохранять»
-  haTab: [594, 790], // bar: the Home Assistant page; on the live page this spot is the frame below it, not a card
 };
+// Taps on the bar: which of its five buttons (home, scenes, Home Assistant, settings, add), at its x on the
+// screenshot the tap was decided on, and how low on it
+export const BAR_TAPS = {
+  gear: { button: 3, y: 770 }, // settings
+  // the Home Assistant page; low on the button, so that on a page that opened meanwhile (the bar hidden) the tap
+  // lands on the frame below it, not on a card
+  haTab: { button: 2, y: 790 },
+};
+// [x, y] of a tap; `bar`: barButtons() of the screenshot it was decided on (needed for a tap on the bar)
+export function tapPoint(name, bar) {
+  if (TAPS[name]) return TAPS[name];
+  const t = BAR_TAPS[name];
+  if (!t) throw new Error(`no tap named ${name}`);
+  if (!bar) throw new Error(`the ${name} tap needs the bar's buttons, found on the screenshot`);
+  return [bar.x[t.button], t.y];
+}
 
 // [x0, y0, x1, y1] and the SHA-256 of its RGB bytes on the calibration screenshot of `screen`
 export const FINGERPRINTS = {
@@ -63,21 +82,66 @@ function contentSamples(img) {
   return out;
 }
 
+// The row the bar's buttons are found on: above their icons, across the whole bar but the logo and the clock.
+export const BAR_SCAN = [80, 752, 1180, 753];
+const BUTTON_WIDTH = [44, 52]; // 48 px on this row
+const BUTTON_GAP = [18, 30]; // 24 px of bar between two buttons
+// The bar's five buttons on the screenshot: { active: the index of the lit one, x: their centres }, or null when the
+// row is not exactly the bar, then five buttons of the right width and spacing with one of them lit, then the bar
+// again (an anti-aliased pixel or two at a button's edge is allowed).
+export function barButtons(img) {
+  const bytes = img.region(...BAR_SCAN);
+  const runs = [];
+  for (let i = 0; i * 3 < bytes.length; i++) {
+    const c = [bytes[3 * i], bytes[3 * i + 1], bytes[3 * i + 2]];
+    const kind = near(c, BLUE) ? 'lit' : near(c, ROW) ? 'button' : near(c, BAR) ? 'bar' : 'edge';
+    const last = runs[runs.length - 1];
+    if (last?.kind === kind) last.end = i;
+    else runs.push({ kind, start: i, end: i });
+  }
+  const parts = [];
+  for (const r of runs) {
+    if (r.kind !== 'edge') { parts.push(r); continue; }
+    if (r.end - r.start + 1 > 2) return null;
+  }
+  if (parts.length !== 11) return null;
+  const width = (r) => r.end - r.start + 1;
+  const inside = (v, [lo, hi]) => v >= lo && v <= hi;
+  const buttons = parts.filter((_, i) => i % 2 === 1);
+  if (parts.some((r, i) => (i % 2 === 0) !== (r.kind === 'bar'))) return null;
+  if (!buttons.every((r) => inside(width(r), BUTTON_WIDTH))) return null;
+  if (!parts.slice(2, -2).filter((_, i) => i % 2 === 0).every((r) => inside(width(r), BUTTON_GAP))) return null;
+  const lit = buttons.flatMap((r, i) => (r.kind === 'lit' ? [i] : []));
+  if (lit.length !== 1) return null;
+  return { active: lit[0], x: buttons.map((r) => Math.round(BAR_SCAN[0] + (r.start + r.end) / 2)) };
+}
+
 export const fingerprint = (img, rect) => createHash('sha256').update(img.region(...rect)).digest('hex');
 const printed = (img, ...names) => names.every((n) => fingerprint(img, FINGERPRINTS[n].rect) === FINGERPRINTS[n].sha256);
 
 // -> 'off' | 'black' | 'bar' | 'settings' | 'settings-update' | 'network' | 'ha-settings' | 'clear-dialog' | 'live' | 'unknown'
-export function classifyScreen(img) {
-  if (img.width !== 1280 || img.height !== 800) return 'unknown';
+export const classifyScreen = (img) => readScreen(img).screen;
+
+// -> { screen, bar }: bar is barButtons() on a screen that shows the bar (bar, the settings pages), else null
+export function readScreen(img) {
+  if (img.width !== 1280 || img.height !== 800) return { screen: 'unknown', bar: null };
   const at = (x, y) => img.rgb(x, y);
   const is = (x, y, ref) => near(at(x, y), ref);
+  // the bar is read only where it is up: on the live page the row it is scanned on shows the dashboard
+  const bar = is(300, 770, BAR) ? barButtons(img) : null;
+  const screen = classify(img, at, is, bar);
+  return { screen, bar: ['bar', 'settings', 'settings-update', 'network', 'ha-settings'].includes(screen) ? bar : null };
+}
+
+function classify(img, at, is, bar) {
   // the «Очистить кэш…» confirmation: its height, the blue «Да» band, and its own title and text
   if (is(720, 458, BLUE) && is(900, 458, BLUE) && is(640, 420, DIALOG) && is(720, 302, DIALOG) && is(720, 485, DIALOG)
     && dark(at(720, 296)) && dark(at(720, 495)) && is(300, 770, DIMMED_BAR)) {
     return printed(img, 'dialogTitle', 'dialogText', 'dialogYes') ? 'clear-dialog' : 'unknown';
   }
-  // settings pages: the gear is the active bar button and the HA button is not
-  if (is(648, 770, BLUE) && is(666, 752, BLUE) && is(300, 770, BAR) && is(594, 790, ROW)) {
+  // settings pages: the gear is the lit bar button (also where it is tapped, left of its icon), and the HA tab's spot
+  // is on the HA button
+  if (bar?.active === 3 && is(bar.x[3] - 18, 770, BLUE) && is(bar.x[2], 790, ROW)) {
     if (is(960, 327, ROW) && is(960, 294, BG) && is(960, 360, BG) && is(960, 600, BG) && is(1085, 690, BLUE) && is(1030, 690, BLUE)
       && printed(img, 'haTitle', 'haClearCache', 'haSave')) return 'ha-settings';
     if (is(960, 623, ROW) && is(960, 590, BG) && is(960, 656, BG) && is(960, 524, BG) && is(960, 314, BG) && is(1225, 89, BLUE)
@@ -94,8 +158,7 @@ export function classifyScreen(img) {
   const content = contentSamples(img);
   const contentDark = content.every(dark);
   if (contentDark && dark(at(640, 797)) && dark(at(300, 770)) && dark(at(3, 400))) return 'off';
-  if (contentDark && is(300, 770, BAR) && is(572, 770, BLUE) && is(594, 752, BLUE) && is(594, 790, BLUE) && is(648, 770, ROW)
-    && is(640, 797, BAR)) return 'bar';
+  if (contentDark && bar?.active === 2 && is(bar.x[2], 790, BLUE) && is(bar.x[3] - 18, 770, ROW) && is(640, 797, BAR)) return 'bar';
   if (contentDark && is(640, 797, BAR) && dark(at(300, 770)) && is(3, 400, BG)) return 'black';
   if (content.filter(teal).length / content.length >= 0.6 && is(640, 797, BAR) && is(594, 790, BG)) return 'live';
   return 'unknown';
