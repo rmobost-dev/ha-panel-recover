@@ -1,9 +1,12 @@
 // What the Shelly Wall Display XL shows, told from a 1280x800 screenshot. Calibrated on real screenshots of one
-// firmware build with the Russian UI (2026-10-01; tests/fixtures/make-panel-screens.mjs of the tooling repository):
+// firmware build with the Russian UI (2026-10-01, the settings under the update notice 2026-10-07;
+// tests/fixtures/make-panel-screens.mjs of the tooling repository):
 // - colours at fixed points give the layout (which bar button is active, rows and the gaps between them);
 // - the settings pages and the dialog must also show the exact pixels of their titles and of the label under the tap
 //   (FINGERPRINTS: SHA-256 of those rectangles), so a moved row, another sub-page or another language reads as
-//   "unknown". The black page and the bar (its buttons animate) are recognised by colour only.
+//   "unknown". The one shift known is the settings list under the «Доступно обновление» notice: one row lower, with
+//   the label under the tap checked there (the notice itself is not fingerprinted: its version number changes).
+//   The black page and the bar (its buttons animate) are recognised by colour only.
 // The tool also refuses any other device or firmware build (CALIBRATION).
 import { createHash } from 'node:crypto';
 
@@ -15,6 +18,7 @@ export const TAPS = {
   strip: [640, 797], // the thin strip left by the hidden bar: a tap brings the bar back (a swipe does not)
   gear: [666, 770], // bar: settings
   network: [960, 353], // Настройки: «Сеть»
+  networkBelowUpdate: [960, 419], // Настройки under the «Доступно обновление» notice row: «Сеть», one row lower
   homeAssistant: [960, 623], // Сеть: «Home Assistant»
   clearCache: [960, 327], // Home Assistant: «Очистить кэш…»
   yes: [813, 458], // the confirmation dialog: «Да»
@@ -26,6 +30,10 @@ export const TAPS = {
 export const FINGERPRINTS = {
   settingsTitle: { screen: 'settings', rect: [893, 17, 1028, 48], sha256: '0120fcfb6d590548ad8e44b903a999d4c18af9bf7799a69f5d608aedfdac2271' }, // «Настройки»
   settingsNetwork: { screen: 'settings', rect: [692, 343, 739, 364], sha256: '7b61094d2e4f5e83c1e98657f86183adfd4a68658ff8300d0dd163dbd9f5230c' }, // «Сеть»
+  // Настройки with the «Доступно обновление» row on top (a newer firmware is out; screenshot of 2026-10-07): the same
+  // title, and the same «Сеть» label one row (66 px) lower
+  settingsUpdateTitle: { screen: 'settings-update', rect: [893, 17, 1028, 48], sha256: '0120fcfb6d590548ad8e44b903a999d4c18af9bf7799a69f5d608aedfdac2271' }, // «Настройки»
+  settingsUpdateNetwork: { screen: 'settings-update', rect: [692, 409, 739, 430], sha256: '7b61094d2e4f5e83c1e98657f86183adfd4a68658ff8300d0dd163dbd9f5230c' }, // «Сеть»
   networkTitle: { screen: 'network', rect: [928, 17, 993, 44], sha256: '835770119126efd23000ad4d6b9e30d1806715fd5bca4c9ec459ef4296745aed' }, // «Сеть»
   networkHomeAssistant: { screen: 'network', rect: [693, 613, 823, 634], sha256: '28ae6560093409df57191b4735457f7289a878b3eca5a46e078b33e732038d0b' }, // «Home Assistant»
   haTitle: { screen: 'ha-settings', rect: [867, 17, 1054, 44], sha256: '9c2f282a2bef3759fd3365fb51814c8d302c611e323332e281dc03f2f959de7f' }, // «Home Assistant»
@@ -58,7 +66,7 @@ function contentSamples(img) {
 export const fingerprint = (img, rect) => createHash('sha256').update(img.region(...rect)).digest('hex');
 const printed = (img, ...names) => names.every((n) => fingerprint(img, FINGERPRINTS[n].rect) === FINGERPRINTS[n].sha256);
 
-// -> 'off' | 'black' | 'bar' | 'settings' | 'network' | 'ha-settings' | 'clear-dialog' | 'live' | 'unknown'
+// -> 'off' | 'black' | 'bar' | 'settings' | 'settings-update' | 'network' | 'ha-settings' | 'clear-dialog' | 'live' | 'unknown'
 export function classifyScreen(img) {
   if (img.width !== 1280 || img.height !== 800) return 'unknown';
   const at = (x, y) => img.rgb(x, y);
@@ -76,6 +84,11 @@ export function classifyScreen(img) {
       && printed(img, 'networkTitle', 'networkHomeAssistant')) return 'network';
     if (is(960, 353, ROW) && is(960, 320, BG) && is(960, 386, BG) && is(960, 89, ROW) && is(960, 122, BG) && is(960, 452, BG)
       && is(960, 485, BG) && is(1225, 89, ROW) && printed(img, 'settingsTitle', 'settingsNetwork')) return 'settings';
+    // the same list one row lower, under a notice row on top: «Доступно обновление» stays there for as long as a newer
+    // firmware is out and not installed (2026-10-07, 2.8.1)
+    if (is(960, 419, ROW) && is(960, 386, BG) && is(960, 452, BG) && is(960, 485, ROW) && is(960, 89, ROW) && is(960, 122, BG)
+      && is(960, 155, ROW) && is(960, 188, BG) && is(960, 518, BG) && is(960, 551, BG) && is(1225, 89, ROW)
+      && printed(img, 'settingsUpdateTitle', 'settingsUpdateNetwork')) return 'settings-update';
     return 'unknown';
   }
   const content = contentSamples(img);

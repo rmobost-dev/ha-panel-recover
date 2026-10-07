@@ -1,5 +1,6 @@
 // Brings the Shelly app's built-in Home Assistant page back after it went black (a Shelly app restart or a reboot):
-// the bottom strip → settings → Сеть → Home Assistant → «Очистить кэш…» → «Да» → «Сохранять» → the HA tab.
+// the bottom strip → settings → Сеть → Home Assistant → «Очистить кэш…» → «Да» → «Сохранять» → the HA tab
+// («Сеть» is a row lower while the settings show the «Доступно обновление» notice on top).
 // Safety rules, because a tap in the wrong place could switch off the panel's Wi-Fi or a light:
 // - only on the device and firmware build the taps were measured on (CALIBRATION);
 // - before every tap a fresh screenshot must show the screen that tap belongs to (panel-screens.mjs): the settings
@@ -321,7 +322,7 @@ export async function recoverPanel({
   // recovered: the cache was cleared and the page is live; shown: a live page was only brought to the front with the
   // HA tab; came-back: the page came back by itself during the run, before anything was cleared
   const done = () => ({ result: cleared ? 'recovered' : !tapped ? 'already-live' : onlyHaTab ? 'shown' : 'came-back' });
-  const SETTINGS = ['settings', 'network', 'ha-settings'];
+  const SETTINGS = ['settings', 'settings-update', 'network', 'ha-settings'];
 
   try {
     let info;
@@ -400,6 +401,9 @@ export async function recoverPanel({
             break;
           case 'settings':
             await tap('network', s.screen); wanted = ['network'];
+            break;
+          case 'settings-update':
+            await tap('networkBelowUpdate', s.screen); wanted = ['network'];
             break;
           case 'network':
             await tap('homeAssistant', s.screen); wanted = ['ha-settings'];

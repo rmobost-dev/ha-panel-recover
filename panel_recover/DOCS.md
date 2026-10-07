@@ -9,7 +9,8 @@ it back. This add-on does that by itself.
 - Every `poll_seconds` it reads the panel's uptimes (`/rpc/Sys.GetStatus`). When the Shelly app's uptime goes
   down (or the panel's), the app restarted.
 - It waits until the app has run for `settle_seconds`, then runs the recovery: the bottom strip → settings →
-  Сеть → Home Assistant → «Очистить кэш…» → «Да» → «Сохранять» → the HA tab.
+  Сеть → Home Assistant → «Очистить кэш…» → «Да» → «Сохранять» → the HA tab. While a newer firmware is out, the
+  settings show a «Доступно обновление» row on top and «Сеть» is one row lower: it is tapped there.
 - Before every tap a fresh screenshot must show the screen that tap belongs to: the settings pages and the
   confirmation dialog down to the pixels of their titles and of the label under the tap, the black page and the
   Shelly bar by their colours. Anything else (another screen, a dialog it did not open, a different model or
